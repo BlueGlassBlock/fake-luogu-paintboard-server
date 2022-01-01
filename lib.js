@@ -23,6 +23,8 @@ const WebSocket = require('ws');
 const server = require('server');
 const json = require('server/reply/json');
 const status = require('server/reply/status');
+const Crypto = require('crypto');
+const url = require('url');
 
 const { get, post } = server.router;
 
@@ -62,9 +64,15 @@ const COLOR = [
 ];
 
 const DEFAULT_COLOR = 2;
-const REQUIRED_REFERER = 'https://www.luogu.com.cn/paintBoard';
 
 const constants = require('./constants');
+
+function randomString(size = 25) {  
+  return Crypto
+    .randomBytes(size)
+    .toString('base64')
+    .slice(0, size)
+}
 
 async function createServer({
   port = constants.port,
@@ -135,27 +143,26 @@ async function createServer({
     log.info(`WebSocket broadcast: ${broadcast}`);
   });
 
+  async function resetToken(ctx) {
+    return json({ status: 200, data: {token: randomString()} });
+  }
+
+
   async function paint(ctx) {
     function response(statusCode, message) {
       ctx.log.info(`${statusCode}: ${message}`);
       return json({ status: statusCode, data: message });
     }
 
-    const uid = ctx.cookies?._uid;
-    const clientId = ctx.cookies?.__client_id;
+    const token = url.parse(ctx.url, true).query?.token;
 
     if (!noRestrict) {
-      if (!uid || !clientId) {
-        return response(401, '没有登录（你需要在 Cookies 中包含 "_uid" 和 "__client_id"）');
+      if (!token) {
+        return response(401, '未找到 Token');
       }
 
-      const referer = ctx.headers?.referer;
-      if (referer !== REQUIRED_REFERER) {
-        return response(412, `Referer 应为 "${REQUIRED_REFERER}"`);
-      }
-
-      if (lastPaint.has(uid) && Date.now() - lastPaint.get(uid) < cd) {
-        return response(500, `uid:${uid} 冷却中`);
+      if (lastPaint.has(token) && Date.now() - lastPaint.get(token) < cd) {
+        return response(403, `Token:${token} 冷却中`);
       }
     }
 
@@ -165,11 +172,11 @@ async function createServer({
       const color = +ctx.data.color;
 
       if (inRange(x, 0, width) && inRange(y, 0, height) && inRange(color, 0, COLOR.length)) {
-        lastPaint.set(uid, Date.now());
+        lastPaint.set(token, Date.now());
         await paintQueue.push({
           x, y, color, log: ctx.log,
         });
-        return response(200, `成功（uid:${uid}, x:${x}, y:${y}, color:${color}）`);
+        return response(200, `成功（Token:${token}, x:${x}, y:${y}, color:${color}）`);
       }
     }
 
@@ -180,6 +187,7 @@ async function createServer({
     get('/paintBoard', () => homePage),
     get('/paintBoard/board', getBoard),
     post('/paintBoard/paint', paint),
+    post('/paintBoard/resetToken', resetToken),
     get(() => status(404).send('Not Found')),
   ]);
 
